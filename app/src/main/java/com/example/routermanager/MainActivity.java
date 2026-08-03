@@ -1,10 +1,12 @@
 package com.example.routermanager;
 
 import android.os.Bundle;
+import android.util.Log;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.io.IOException;
@@ -17,14 +19,16 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "RouterManager";
+
     private WebView webView;
     private NulFilterProxy proxy;
 
-    // 路由器参数：根据你的实际情况修改
-    private static final String ROUTER_IP = "192.168.10.16";   // 常见路由器地址
+    // 路由器参数：请根据你的实际情况修改！！！
+    private static final String ROUTER_IP = "192.168.10.16";    // 路由器地址
     private static final int ROUTER_PORT = 80;
-    private static final String USERNAME = "admin";          // 默认用户名
-    private static final String PASSWORD = "admin";          // 默认密码
+    private static final String USERNAME = "admin";
+    private static final String PASSWORD = "admin";
     private static final int PROXY_PORT = 8888;
 
     @Override
@@ -33,37 +37,53 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
-        // 配置 WebView
         WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);                // 允许 JavaScript
-        settings.setDomStorageEnabled(true);                // 允许 DOM Storage
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
-        webView.setWebViewClient(new WebViewClient());
 
-        // 启动本地代理
+        // 设置 WebViewClient，捕获页面加载错误
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedError(WebView view, int errorCode,
+                                        String description, String failingUrl) {
+                Log.e(TAG, "WebView error: " + errorCode + " - " + description + " URL:" + failingUrl);
+                Toast.makeText(MainActivity.this, "页面加载错误: " + description, Toast.LENGTH_LONG).show();
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                Log.d(TAG, "页面加载完成: " + url);
+                if (url.startsWith("http://127.0.0.1")) {
+                    Toast.makeText(MainActivity.this, "管理页面加载成功", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
+        // 启动代理
         proxy = new NulFilterProxy(PROXY_PORT, ROUTER_IP, ROUTER_PORT);
         proxy.start();
+        Log.d(TAG, "代理已启动: 127.0.0.1:" + PROXY_PORT);
+        Toast.makeText(this, "代理已启动", Toast.LENGTH_SHORT).show();
 
-        // 先登录获取 Cookie，再加载页面
+        // 登录并加载页面
         new Thread(() -> {
-            boolean loginSuccess = loginAndSetCookie();
+            boolean success = loginAndSetCookie();
             runOnUiThread(() -> {
-                if (loginSuccess) {
-                    // 登录成功，加载管理页面（通过代理）
+                if (success) {
+                    Log.d(TAG, "登录成功，准备加载管理页面");
+                    Toast.makeText(MainActivity.this, "登录成功，正在加载页面", Toast.LENGTH_SHORT).show();
                     webView.loadUrl("http://127.0.0.1:" + PROXY_PORT + "/wizard.asp");
                 } else {
-                    // 登录失败，也可以尝试直接加载（某些路由器可能无需登录即可看到部分页面）
+                    Log.e(TAG, "登录失败，尝试加载首页");
+                    Toast.makeText(MainActivity.this, "登录失败，尝试加载首页", Toast.LENGTH_LONG).show();
                     webView.loadUrl("http://127.0.0.1:" + PROXY_PORT + "/");
                 }
             });
         }).start();
     }
 
-    /**
-     * 通过原生 HTTP 请求登录路由器，获取 Set-Cookie 并注入到 WebView 的 CookieManager
-     * @return 登录成功返回 true
-     */
     private boolean loginAndSetCookie() {
         OkHttpClient client = new OkHttpClient();
         RequestBody body = new FormBody.Builder()
@@ -75,22 +95,24 @@ public class MainActivity extends AppCompatActivity {
                 .post(body)
                 .build();
         try (Response response = client.newCall(request).execute()) {
-            if (response.isSuccessful() || response.isRedirect()) {
-                // 从响应头中提取所有 Set-Cookie
-                List<String> cookies = response.headers("Set-Cookie");
-                CookieManager cookieManager = CookieManager.getInstance();
-                cookieManager.setAcceptCookie(true);
-                // 注意：Cookie 要设置到代理域名 "127.0.0.1" 上，这样 WebView 通过代理访问时才会携带
-                for (String cookie : cookies) {
-                    cookieManager.setCookie("http://127.0.0.1", cookie);
-                }
-                cookieManager.flush();
-                return true;
+            Log.d(TAG, "登录响应码: " + response.code());
+            List<String> setCookies = response.headers("Set-Cookie");
+            if (setCookies.isEmpty()) {
+                Log.e(TAG, "未收到 Set-Cookie");
+                return false;
             }
+            CookieManager cookieManager = CookieManager.getInstance();
+            cookieManager.setAcceptCookie(true);
+            for (String cookie : setCookies) {
+                Log.d(TAG, "Set-Cookie: " + cookie);
+                cookieManager.setCookie("http://127.0.0.1", cookie);
+            }
+            cookieManager.flush();
+            return true;
         } catch (IOException e) {
-            e.printStackTrace();
+            Log.e(TAG, "登录请求异常: " + e.getMessage());
+            return false;
         }
-        return false;
     }
 
     @Override
